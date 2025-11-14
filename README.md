@@ -310,7 +310,7 @@ def auto_fix_project(path, review_output, files_to_process, apply_all, interacti
 ### 6.2 Installation Steps
 ```bash
 # 1. Clone or download the script
-git clone <repository-url>
+git clone https://github.com/ashay-patil/Ai-Code-Debugger-And-Auto-Fixer.git
 cd Ai-Code-Debugger-And-Auto-Fixer
 
 # 2. Install dependencies (Recommended to Use Virtual Environment)
