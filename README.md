@@ -263,7 +263,7 @@ def auto_fix_project(path, review_output, files_to_process, apply_all, interacti
 
 #### 5.1.2 Code Analysis Limitations
 - **No Abstract Syntax Tree (AST) Parsing**: Relies entirely on AI understanding
-- **Limited Cross-file Understanding**: Batch processing may miss inter-file dependencies
+- **Limited Cross-batch Understanding**: Batch processing may miss inter-batch files dependencies
 - **No Build System Integration**: Cannot understand complex build configurations
 - **Static Analysis Only**: No runtime behavior analysis
 
