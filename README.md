@@ -321,10 +321,26 @@ export GEMINI_API_KEY="your_actual_api_key_here"
 # and use dotenv for accessing the Gemini_API_KEY in the code
 
 # 4. Run the application in GUI Mode
+# Autofix checkbox disabled -> Only generates the review of Codebase without updating the codebase
+# Autofix checkbox enabled -> Generates the review of Codebase and takes users permission to update the code in the codebase
+# Autofix checkbox enabled + Apply All checkbox enabled -> Generates the review of Codebase and updates the Code Automatically without users permission
+# JSON checkbox enabled -> Generates brief summary of Debugging in a JSON file 
 python app.py
 
-# 5. Else run the application in CLI Mode
-python app.py ./project-path --json --autofix --userprompt "Make the body color as purple"
+# 5. Run the Application in CLI Mode
+# 5.1 Review Mode (No Autofix)
+python app.py ./project-path --json
+
+# 5.2 Review + AutoFix Mode 
+python app.py ./project-path --json --autofix
+
+# 5.3 Review + AutoFix + Auto Code Updation Mode 
+python app.py ./project-path --json --autofix --apply-all
+
+# 5.4. Custom userpromt 
+python app.py ./project-path --json --autofix --userprompt "Make the body color as purple in css file"
+
+
 ```
 
 ### 6.3 Configuration Options
@@ -357,10 +373,10 @@ python app.py ./project-path --json --autofix --userprompt "Make the body color 
 #### 7.2.1 Project Preparation
 ```bash
 # 1. Start with small projects
-python app.py ./small-project --autofix  # Interactive mode
+python app.py ./small-project --autofix  # CLI Interactive mode
 
 # 2. Use dry-run mode first
-python app.py ./project --json
+python app.py ./project --json # CLI Review Mode
 
 ```
 
