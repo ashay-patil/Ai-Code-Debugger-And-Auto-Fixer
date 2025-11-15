@@ -197,47 +197,145 @@ def chunk_files(files, file_contents, max_chars):
 The system uses a sophisticated prompt engineering approach:
 
 ```python
-def review_project(all_code, user_prompt):
+def review_project(all_code: str, user_prompt: Optional[str]) -> str:
     prompt = f"""
 You are an expert software debugger and code reviewer.
 
-Analyze the entire project for defects and risks...
-Scope of checks (be thorough and conservative):
-- Syntax errors and runtime errors
-- Incorrect logic and edge cases
-- Exception handling quality
-- Resource handling and leaks
-- Dependency/import issues
-- API contract mismatches
-- Type issues and nullability
-- Security concerns
-- Performance hotspots
-- Code quality
+Analyze the entire project for defects and risks. Each section below starts with "### FILE PATH:"
+and contains the full code for that file. Provide precise, actionable findings and corrected code.
 
-Additionally, include three Markdown tables for every file...
+Scope of checks (be thorough and conservative):
+- Syntax errors and runtime errors (undefined names, indexing, attribute, import errors)
+- Incorrect logic and edge cases (off-by-one, null/None checks, empty input handling)
+- Exception handling quality (missing try/except where needed; overbroad excepts; swallowed errors)
+- Resource handling (files, network, subprocesses) and leaks; context managers where applicable
+- Dependency/import issues (wrong filenames/paths/extensions, missing modules, circular imports)
+- API contract mismatches (wrong params/return types, missing awaits, async misuse)
+- Type issues and nullability; mutation of shared state; concurrency/async pitfalls
+- HTML/CSS/JS linkage mistakes (wrong script/style paths, case sensitivity, extension mismatches)
+- Frontend errors (DOM selectors, event binding, missing assets, incorrect MIME/rel attributes)
+- Security concerns (eval/exec, command injection, XSS/CSRF risks, hardcoded secrets, plaintext keys)
+- Performance hotspots (N+1 queries/polls, excessive loops, unbounded recursion, heavy sync I/O on UI)
+- Code quality (duplication, long functions, poor naming, missing docs/comments where non-obvious)
+- During api fetching the code should be wrapped in try catch block.If not then the corrected code which you will give should contain that try catch block
+Additionally, include three Markdown tables for every file:
+
+Chart 1 - Review Checklist: for the present code and not about the corrected code. The charts should be made for the existing codes
+| Review Aspect | Status |
+|---|---|
+| Variable naming | ✅ / ❌ |
+| Hardcoded values/secrets | ✅ / ❌ |
+| Code repetition | ✅ / ❌ |
+| Modularity | ✅ / ❌ |
+| Complexity (high/med/low) | high/med/low |
+| Comments & docs | ✅ / ❌ |
+| Exception handling present | ✅ / ❌ |
+| Dependency/import correctness | ✅ / ❌ |
+| Security concerns | ✅ / ❌ |
+
+Chart 2 - API Calls Summary (if any found):
+| API Endpoint | Request (sample) | Response (sample) |
+|---|---|---|
+| (list endpoints or 'None') | | |
+
+Chart 3 - Security Issues / Best Practices:
+| Category | Recommendation |
+|---|---|
+| (e.g. plaintext password storage) | (recommendation) |
+
+User requirement: {user_prompt or 'N/A'}
+Important: Fix file import/link mismatches robustly. Example: if the folder has script.js but HTML imports app.js,
+change it to script.js; similarly styles.css vs style.css, respecting actual files present. NEVER invent new files
+that do not exist—choose the most plausible correct existing path/filename.
+
+Here is the project:
+{all_code}
+
+Output format (repeat for all files whether there exists error or not. If no error is present then say that no error and in fixed code place the original code as it is, and if there is error then tell the error and give the corrected code in fixed code):
+File: <path>
+Error: <short description>
+Fixed code:
+\`\`\`<language>
+<corrected file code>
+\`\`\`
 """
 ```
 
 #### 4.3.3 Fix Application Phase
 ```python
-def auto_fix_project(path, review_output, files_to_process, apply_all, interactive):
+def auto_fix_project(path: str, review_output: str, files_to_process: List[str], apply_all=False, interactive: bool = True, prompt_func=None, ui_logger=None):
     """
-    Implements safe code modification with user consent
+    Auto-fix files based on review output.
+    
+    Args:
+        path: Project directory path
+        review_output: Review output for the files being processed
+        files_to_process: List of file paths to process (only these files will be fixed)
+        apply_all: Whether to apply all fixes automatically
+        interactive: Whether to prompt for each fix
+        prompt_func: Function to call for user prompts
+        ui_logger: Optional UI logger function
     """
+    model = genai.GenerativeModel(MODEL_NAME)
+
     for file_path in files_to_process:
-        # 1. Generate fix using AI
-        fix_prompt = create_fix_prompt(review_output, file_path, current_code)
-        new_code = generate_content(fix_prompt)
-        
-        # 2. User approval (if interactive)
-        if interactive and not apply_all:
-            user_approved = get_user_approval(file_path)
-            if not user_approved:
-                continue
+        code = read_file(file_path)
+        if not code:
+            continue
+
+        fix_prompt = f"""
+You are an AI assistant. Using the review below, fix only issues related to this file.
+
+Review:
+{review_output}
+
+File: {file_path}
+Current Code:
+\`\`\`{Path(file_path).suffix[1:]}
+{code}
+\`\`\`
+
+Output the corrected code for this file only.
+"""
+        try:
+            resp = model.generate_content(fix_prompt)
+            new_code = resp.text.strip()
+            console.rule(f"[bold yellow]🧠 Suggested Fix for {file_path}[/bold yellow]")
+            if ui_logger:
+                ui_logger(f"\n===== Suggested Fix for {file_path} =====\n")
+                ui_logger(new_code[:3000] + ("\n...[truncated]\n" if len(new_code) > 3000 else "\n"))
+            else:
+                console.print(Markdown(new_code[:3000]))
+
+            if apply_all:
+                write_file(file_path, new_code)
+            else:
+                if interactive:
+                    if ui_logger : 
+                        apply_change = bool(prompt_func(f"Apply suggested changes to {file_path}?"))
+                        if apply_change:
+                            write_file(file_path, new_code)
+                        else:
+                            if ui_logger:
+                                ui_logger(f"Skipped: {file_path}\n")
+                            else:
+                                console.print(f"[yellow]⏩ Skipped: {file_path}[/yellow]")
+                    else :
+                            choice = input(f"Apply suggested changes to {file_path}? (y/n): ").strip().lower()
+                            if choice == 'y':
+                                write_file(file_path, new_code)
+                            else:
+                                console.print(f"[yellow]⏩ Skipped: {file_path}[/yellow]")
                 
-        # 3. Safe write with backup
-        safe_backup(file_path)
-        write_file(file_path, clean_code_fences(new_code))
+                else:
+                    if ui_logger:
+                        ui_logger(f"Skipped (non-interactive): {file_path}\n")
+                    
+                    else:
+                        console.print(f"[yellow]⏩ Skipped (non-interactive): {file_path}[/yellow]")
+        except Exception as e:
+            console.print(f"[red]Error fixing {file_path}: {e}[/red]")
+
 ```
 
 ### 4.4 Data Flow Diagram
