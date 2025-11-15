@@ -156,8 +156,10 @@ SUPPORTED_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".java", ".cpp", ".html", ".c
 ```
 
 ### 4.2 Core Algorithm Flowchart
-![Core Algorithm Flowchart](Flowchart.svg)
 
+<div style="height: 1300px; margin-left : 20vw">
+  <img src="Flowchart.svg">
+</div>
 
 ### 4.3 Detailed Algorithm Explanation
 
