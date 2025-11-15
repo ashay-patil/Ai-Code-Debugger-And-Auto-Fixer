@@ -75,6 +75,14 @@ SUPPORTED_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".java", ".cpp", ".html", ".c
   - XSS/CSRF risks identification
   - Command injection vulnerabilities
   - Insecure API implementations
+- **Exception Handling Analysis**: Evaluates try/except coverage, overbroad except clauses, and swallowed errors
+- **Resource Management**: Identifies file/network resource leaks and missing context managers
+- **Dependency & Import Validation**: Detects circular imports, missing modules, and path mismatches
+- **API Contract Compliance**: Validates parameter types, return types, and async/await usage
+- **Concurrency & State Management**: Identifies shared state mutation and async/threading pitfalls
+- **Frontend Integration**: Checks HTML/CSS/JS linkage, DOM selectors, and asset loading
+- **Performance Optimization**: Detects N+1 queries, excessive loops, and heavy synchronous I/O
+- **Code Quality Metrics**: Assesses duplication, function length, naming conventions, and documentation
 
 #### 3.1.3 Automated Code Fixing
 - **Interactive Fix Application**: User-controlled code modifications
