@@ -15,8 +15,6 @@ The AI Code Debugger & Auto-Fixer is an advanced software analysis tool that lev
 5. [Current Limitations & Known Issues](#5-current-limitations--known-issues)
 6. [Installation & Setup Requirements](#6-installation--setup-requirements)
 7. [Usage Guidelines](#7-usage-guidelines)
-8. [Testing Recommendations](#8-testing-recommendations)
-9. [Future Enhancement Roadmap](#9-future-enhancement-roadmap)
 
 ---
 
