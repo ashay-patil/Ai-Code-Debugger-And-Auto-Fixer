@@ -17,23 +17,20 @@ try:
 except Exception:
     tk = None
 
-# =========================
-# ⚙ Configuration
-# =========================
+
 console = Console()
-MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash")  #Enter Your Gemini Model name here or use Environment Variable for best pratices
-genai.configure(api_key=os.getenv("GEMINI_API_KEY", "...Enter Your Gemini API Key here or Use Environment Variable for best practices..."))
+MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "models/gemini-2.5-flash")  #Enter Your Gemini Model name here or use Environment Variable for best pratices
+genai.configure(api_key=os.getenv("GEMINI_API_KEY", "...You can hardcode your api key here .... or use env variables...."))
 
 try:
     MODEL = genai.GenerativeModel(MODEL_NAME)
+    
 except Exception:
     MODEL = None
 
 SUPPORTED_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".java", ".cpp", ".html", ".css")
 
-# =========================
-# 🧩 Utility Functions
-# =========================
+
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
