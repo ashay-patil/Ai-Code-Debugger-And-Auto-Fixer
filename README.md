@@ -419,31 +419,37 @@ Output the corrected code for this file only.
 git clone https://github.com/ashay-patil/Ai-Code-Debugger-And-Auto-Fixer.git
 cd Ai-Code-Debugger-And-Auto-Fixer
 
-# 2. Install dependencies (Recommended to Use Virtual Environment)
-pip install google-generativeai rich openpyxl
+# 2. Make a virtual environment
+conda create -p venv python=3.10.0
 
-# 3. Set environment variable
+# 3. Activate the virtual environment
+conda activate .\venv\
+
+# 4. Install dependencies (Recommended to Use Virtual Environment)
+pip install -r requirements.txt
+
+# 5. Set environment variable
 export GEMINI_API_KEY="your_actual_api_key_here"
 # and use dotenv for accessing the Gemini_API_KEY in the code
 
-# 4. Run the application in GUI Mode
+# 6. Run the application in GUI Mode
 # Autofix checkbox disabled -> Only generates the review of Codebase without updating the codebase
 # Autofix checkbox enabled -> Generates the review of Codebase and takes users permission to update the code in the codebase
 # Autofix checkbox enabled + Apply All checkbox enabled -> Generates the review of Codebase and updates the Code Automatically without users permission
 # JSON checkbox enabled -> Generates brief summary of Debugging in a JSON file 
 python app.py
 
-# 5. Run the Application in CLI Mode
-# 5.1 Review Mode (No Autofix)
+# 7. Run the Application in CLI Mode
+# 7.1 Review Mode (No Autofix)
 python app.py ./project-path --json
 
-# 5.2 Review + AutoFix Mode 
+# 7.2 Review + AutoFix Mode 
 python app.py ./project-path --json --autofix
 
-# 5.3 Review + AutoFix + Auto Code Updation Mode 
+# 7.3 Review + AutoFix + Auto Code Updation Mode 
 python app.py ./project-path --json --autofix --apply-all
 
-# 5.4. Custom userpromt 
+# 7.4. Custom userpromt 
 python app.py ./project-path --json --autofix --userprompt "Make the body color as purple in css file"
 
 
@@ -453,7 +459,7 @@ python app.py ./project-path --json --autofix --userprompt "Make the body color 
 | Environment Variable | Purpose | Default |
 |---------------------|---------|---------|
 | `GEMINI_API_KEY` | Google AI API authentication | Required |
-| `GEMINI_MODEL_NAME` | AI model selection | `gemini-2.0-flash` |
+| `GEMINI_MODEL_NAME` | AI model selection | `models/gemini-2.5-flash` |
 
 ---
 
