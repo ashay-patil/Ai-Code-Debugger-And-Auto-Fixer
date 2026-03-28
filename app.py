@@ -19,12 +19,11 @@ except Exception:
 
 
 console = Console()
-MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "models/gemini-2.5-flash")  #Enter Your Gemini Model name here or use Environment Variable for best pratices
-genai.configure(api_key=os.getenv("GEMINI_API_KEY", "...You can hardcode your api key here .... or use env variables...."))
+MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "models/gemini-2.5-flash")
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 try:
     MODEL = genai.GenerativeModel(MODEL_NAME)
-    
 except Exception:
     MODEL = None
 
@@ -42,9 +41,6 @@ def print_logo():
 ███████║   ██║       ██║       ██║    ██║  ██║  ██║ █████╗     ██   ██╔ ███████ ██████╔╝██║   ██║██║  ███╗██║  ███╗█████╗  ██████╔╝
 ██╔══██║   ██║       ██║       ██║    ██║  ██║  ██║ ██╔══╝     ██╔══██╗ ██╔══╝  ██╔══██╗██║   ██║██║   ██║██║   ██║██╔══╝  ██╔══██╗
 ██║  ██║ ███████╗     ╚██████╗  ╚██████╔╝ ██████╔╝ ███████╗    ██████╔╝ ███████╗██████╔╝╚██████╔╝╚██████╔╝╚██████╔╝███████╗██║  ██║
-
-
-
 [bold magenta]🤖 AI-Based Multi-File Code Debugger + Auto Fixer[/bold magenta]
 """)
 
@@ -77,14 +73,11 @@ def safe_backup(file_path: str):
         console.print(f"[yellow]Warning: Could not create backup for {file_path}: {e}[/yellow]")
 
 def clean_code_fences(text: str) -> str:
-    """Remove Markdown-style code fences and extra labels like 'Fixed code:'."""
     if not text:
         return ""
     s = text.strip()
-    # Remove triple backtick fences
     s = re.sub(r"^```[\w+-]*\n?", "", s)
     s = re.sub(r"\n?```$", "", s)
-    # Remove unnecessary labels
     s = re.sub(r'^\s*(Fixed code|Corrected code|Suggested fix)\s*:\s*', '', s, flags=re.IGNORECASE)
     return s.strip() + "\n"
 
@@ -103,11 +96,6 @@ def build_file_section(file_path: str, code: str) -> str:
     return f"### FILE PATH: {file_path}\n```{suffix}\n{code}\n```\n\n"
 
 def chunk_files(files: List[str], file_contents: Dict[str, str], max_chars: int) -> Tuple[List[str], List[List[str]]]:
-    """
-    Returns tuple of (batches, batch_files) where:
-    - batches: List of batch content strings
-    - batch_files: List of file lists, each corresponding to a batch
-    """
     batches = []
     batch_files = []
     current, current_files, length = [], [], 0
@@ -201,18 +189,6 @@ Fixed code:
     return generate_content(prompt)
 
 def auto_fix_project(path: str, review_output: str, files_to_process: List[str], apply_all=False, interactive: bool = True, prompt_func=None, ui_logger=None):
-    """
-    Auto-fix files based on review output.
-    
-    Args:
-        path: Project directory path
-        review_output: Review output for the files being processed
-        files_to_process: List of file paths to process (only these files will be fixed)
-        apply_all: Whether to apply all fixes automatically
-        interactive: Whether to prompt for each fix
-        prompt_func: Function to call for user prompts
-        ui_logger: Optional UI logger function
-    """
     model = genai.GenerativeModel(MODEL_NAME)
 
     for file_path in files_to_process:
@@ -248,7 +224,7 @@ Output the corrected code for this file only.
                 write_file(file_path, new_code)
             else:
                 if interactive:
-                    if ui_logger : 
+                    if ui_logger:
                         apply_change = bool(prompt_func(f"Apply suggested changes to {file_path}?"))
                         if apply_change:
                             write_file(file_path, new_code)
@@ -257,52 +233,526 @@ Output the corrected code for this file only.
                                 ui_logger(f"Skipped: {file_path}\n")
                             else:
                                 console.print(f"[yellow]⏩ Skipped: {file_path}[/yellow]")
-                    else :
-                            choice = input(f"Apply suggested changes to {file_path}? (y/n): ").strip().lower()
-                            if choice == 'y':
-                                write_file(file_path, new_code)
-                            else:
-                                console.print(f"[yellow]⏩ Skipped: {file_path}[/yellow]")
-                
+                    else:
+                        choice = input(f"Apply suggested changes to {file_path}? (y/n): ").strip().lower()
+                        if choice == 'y':
+                            write_file(file_path, new_code)
+                        else:
+                            console.print(f"[yellow]⏩ Skipped: {file_path}[/yellow]")
                 else:
                     if ui_logger:
                         ui_logger(f"Skipped (non-interactive): {file_path}\n")
-                    
                     else:
                         console.print(f"[yellow]⏩ Skipped (non-interactive): {file_path}[/yellow]")
         except Exception as e:
             console.print(f"[red]Error fixing {file_path}: {e}[/red]")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# EXCEL EXPORT  (fully rewritten)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _strip_inline_md(text: str) -> str:
+    """Remove bold (**), italic (*), and backtick markers from a string."""
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    return text.strip()
+
+
+def _parse_md_tables(text: str):
+    """
+    Yield (headers_list, rows_list) for every markdown table found in *text*.
+    Rows is a list of lists (one inner list per data row).
+    """
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # A table header line has at least two pipe characters
+        if line.count('|') >= 2:
+            # Check that the very next line is a separator (---|--- etc.)
+            if i + 1 < len(lines) and re.match(r'^\s*\|?[\s\-:|]+\|', lines[i + 1]):
+                headers = [_strip_inline_md(c) for c in line.split('|') if c.strip()]
+                i += 2  # skip header + separator
+                rows = []
+                while i < len(lines) and lines[i].count('|') >= 2:
+                    cells = [_strip_inline_md(c) for c in lines[i].split('|') if c.strip() != '']
+                    # Pad / trim to header length
+                    while len(cells) < len(headers):
+                        cells.append('')
+                    rows.append(cells[:len(headers)])
+                    i += 1
+                yield headers, rows
+                continue
+        i += 1
+
+
+def _parse_file_sections(text: str):
+    """
+    Split review text into per-file sections.
+    Each section is a dict: {file, error_lines, fixed_code, tables, body_text}
+    """
+    # Patterns that mark the start of a new file block
+    FILE_RE = re.compile(r'^(?:###\s*FILE\s*PATH\s*:|File\s*:)\s*(.+)', re.IGNORECASE)
+
+    sections = []
+    current = None
+
+    def new_section(path):
+        return {"file": path, "error_lines": [], "fixed_code": [], "tables": [], "body_text": []}
+
+    lines = text.splitlines()
+    i = 0
+    in_code = False
+    capturing_fixed = False
+    code_buf = []
+
+    while i < len(lines):
+        line = lines[i]
+        m = FILE_RE.match(line)
+
+        if m:
+            # Close previous section
+            if current:
+                sections.append(current)
+            current = new_section(m.group(1).strip())
+            in_code = False
+            capturing_fixed = False
+            i += 1
+            continue
+
+        if current is None:
+            i += 1
+            continue
+
+        # Code fence toggle
+        if line.strip().startswith("```"):
+            if not in_code:
+                in_code = True
+                code_buf = []
+            else:
+                in_code = False
+                if capturing_fixed:
+                    current["fixed_code"] = code_buf[:]
+                    capturing_fixed = False
+                code_buf = []
+            i += 1
+            continue
+
+        if in_code:
+            code_buf.append(line)
+            i += 1
+            continue
+
+        # "Fixed code:" label
+        if re.match(r'^\s*(Fixed code|Corrected code)\s*:', line, re.IGNORECASE):
+            capturing_fixed = True
+            i += 1
+            continue
+
+        current["body_text"].append(line)
+        i += 1
+
+    if current:
+        sections.append(current)
+
+    # Extract tables from body_text for each section
+    for sec in sections:
+        body = "\n".join(sec["body_text"])
+        sec["tables"] = list(_parse_md_tables(body))
+
+    return sections
+
+
 def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
     """
-    Save Gemini review output into Excel.
-    Properly parses Markdown tables and fixed code for each file.
+    Save Gemini review output into a properly formatted Excel workbook.
+    - Sheet per file: shows errors, review checklist table, API table, security table
+    - Summary sheet: one row per file with key checklist flags
+    - Raw sheet: full markdown text for reference
     """
     try:
         import openpyxl
         from openpyxl.utils import get_column_letter
-        from openpyxl.styles import Font, Alignment
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     except ImportError:
         console.print("[yellow]Warning: openpyxl not installed. Cannot save to Excel.[/yellow]")
         return
 
+    # ── colour palette ──────────────────────────────────────────────
+    CLR_HEADER_BG  = "2B2D42"   # dark navy
+    CLR_HEADER_FG  = "FFFFFF"
+    CLR_FILE_BG    = "EEF2F7"   # light blue-grey
+    CLR_TABLE_HDR  = "4472C4"   # Excel blue
+    CLR_TABLE_HDR_FG = "FFFFFF"
+    CLR_ALT_ROW    = "DCE6F1"
+    CLR_ERROR_BG   = "FDECEA"   # soft red
+    CLR_OK_BG      = "E8F5E9"   # soft green
+    CLR_SECTION_BG = "FFF3CD"   # soft amber
+
+    thin = Side(style="thin", color="BDBDBD")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def hdr_font(size=11, bold=True, color=CLR_HEADER_FG):
+        return Font(name="Arial", size=size, bold=bold, color=color)
+
+    def body_font(size=10, bold=False, color="000000"):
+        return Font(name="Arial", size=size, bold=bold, color=color)
+
+    def fill(hex_color):
+        return PatternFill("solid", fgColor=hex_color)
+
+    def write_table(ws, start_row, headers, rows, title=None):
+        """Write a formatted table into ws starting at start_row. Returns next free row."""
+        row = start_row
+        if title:
+            ws.cell(row, 1, title).font = Font(name="Arial", size=10, bold=True, color="2B2D42")
+            ws.cell(row, 1).fill = fill(CLR_SECTION_BG)
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=max(len(headers), 1))
+            row += 1
+
+        # Header row
+        for ci, h in enumerate(headers, 1):
+            c = ws.cell(row, ci, h)
+            c.font = hdr_font(size=10)
+            c.fill = fill(CLR_TABLE_HDR)
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = border
+        row += 1
+
+        # Data rows
+        for ri, data_row in enumerate(rows):
+            bg = CLR_ALT_ROW if ri % 2 == 1 else "FFFFFF"
+            for ci, val in enumerate(data_row, 1):
+                c = ws.cell(row, ci, val)
+                c.font = body_font()
+                c.alignment = Alignment(vertical="top", wrap_text=True)
+                c.border = border
+                # Colour status cells
+                if ci == len(headers) and len(headers) == 2:
+                    if val in ("✅", "✓", "OK", "ok"):
+                        c.fill = fill("C8E6C9")
+                    elif val in ("❌", "✗", "FAIL", "fail"):
+                        c.fill = fill("FFCDD2")
+                    else:
+                        c.fill = fill(bg)
+                else:
+                    c.fill = fill(bg)
+            row += 1
+
+        return row + 1   # blank spacer row
+
+    # ── parse ────────────────────────────────────────────────────────
+    sections = _parse_file_sections(review_output)
+
     wb = openpyxl.Workbook()
-    ws = wb.active
-    # Add raw review text on a second sheet to guarantee content presence
-    raw_ws = wb.create_sheet(title="Raw Review")
-    raw_ws.cell(row=1, column=1, value="Gemini Review (pre Auto-Fix)")
-    raw_ws.cell(row=1, column=1).font = Font(bold=True)
-    raw_row = 3
-    # Write as lines for readability
-    for line in review_output.splitlines():
-        raw_ws.cell(row=raw_row, column=1, value=line)
-        raw_row += 1
-    # Adjust width
-    raw_ws.column_dimensions[get_column_letter(1)].width = 120
+    wb.remove(wb.active)   # remove default blank sheet
+
+    TABLE_TITLES = ["Review Checklist", "API Calls Summary", "Security / Best Practices"]
+
+    # ── per-file sheets ──────────────────────────────────────────────
+    for sec in sections:
+        # Safe sheet name (max 31 chars, no special chars)
+        raw_name = Path(sec["file"]).name if sec["file"] else "Unknown"
+        safe_name = re.sub(r'[\\/*?:\[\]]', '_', raw_name)[:31]
+        ws = wb.create_sheet(title=safe_name)
+        ws.column_dimensions["A"].width = 32
+        ws.column_dimensions["B"].width = 60
+        ws.column_dimensions["C"].width = 40
+
+        cur_row = 1
+
+        # ── file path banner ─────────────────────────────────────────
+        ws.row_dimensions[cur_row].height = 22
+        c = ws.cell(cur_row, 1, f"📄  {sec['file']}")
+        c.font = Font(name="Arial", size=11, bold=True, color=CLR_HEADER_FG)
+        c.fill = fill(CLR_HEADER_BG)
+        c.alignment = Alignment(vertical="center")
+        ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=3)
+        cur_row += 2
+
+        # ── errors / description ──────────────────────────────────────
+        error_lines = [
+            l for l in sec["body_text"]
+            if l.strip() and not l.strip().startswith(('|', '#', '-', '`', 'Fixed', 'Corrected'))
+        ]
+        # Clean markdown from error lines
+        error_clean = [_strip_inline_md(re.sub(r'^\d+\.\s*', '', l)) for l in error_lines if l.strip()]
+        error_clean = [e for e in error_clean if e]
+
+        if error_clean:
+            c = ws.cell(cur_row, 1, "Issues Found")
+            c.font = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+            c.fill = fill("C62828")
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=3)
+            cur_row += 1
+            for line in error_clean[:20]:   # cap at 20 lines
+                c = ws.cell(cur_row, 1, line)
+                c.font = body_font()
+                c.fill = fill(CLR_ERROR_BG)
+                c.alignment = Alignment(wrap_text=True, vertical="top")
+                c.border = border
+                ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=3)
+                ws.row_dimensions[cur_row].height = 40
+                cur_row += 1
+            cur_row += 1
+        else:
+            c = ws.cell(cur_row, 1, "✅  No errors found")
+            c.font = Font(name="Arial", size=10, bold=True, color="1B5E20")
+            c.fill = fill(CLR_OK_BG)
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=3)
+            cur_row += 2
+
+        # ── tables ────────────────────────────────────────────────────
+        for ti, (headers, rows) in enumerate(sec["tables"][:3]):
+            title = TABLE_TITLES[ti] if ti < len(TABLE_TITLES) else f"Table {ti + 1}"
+            # Expand column widths for this table
+            for ci in range(len(headers)):
+                col_letter = get_column_letter(ci + 1)
+                ws.column_dimensions[col_letter].width = max(
+                    ws.column_dimensions[col_letter].width, 28
+                )
+            cur_row = write_table(ws, cur_row, headers, rows, title=title)
+
+    # ── Summary sheet ────────────────────────────────────────────────
+    ws_sum = wb.create_sheet(title="Summary", index=0)
+    ws_sum.column_dimensions["A"].width = 40
+    for col in ["B", "C", "D", "E", "F", "G", "H", "I", "J"]:
+        ws_sum.column_dimensions[col].width = 18
+
+    # Title
+    c = ws_sum.cell(1, 1, "🔍  Project Review Summary")
+    c.font = Font(name="Arial", size=13, bold=True, color=CLR_HEADER_FG)
+    c.fill = fill(CLR_HEADER_BG)
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    ws_sum.row_dimensions[1].height = 26
+    total_cols = 1 + 9  # file + 9 checklist aspects
+    ws_sum.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+
+    # Column headers
+    summary_headers = [
+        "File", "Variable Naming", "Hardcoded Secrets", "Code Repetition",
+        "Modularity", "Complexity", "Comments & Docs",
+        "Exception Handling", "Import Correctness", "Security"
+    ]
+    for ci, h in enumerate(summary_headers, 1):
+        c = ws_sum.cell(2, ci, h)
+        c.font = hdr_font(size=10)
+        c.fill = fill(CLR_TABLE_HDR)
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = border
+    ws_sum.row_dimensions[2].height = 30
+
+    CHECKLIST_ASPECTS = [
+        "variable naming", "hardcoded", "code repetition",
+        "modularity", "complexity", "comments", "exception", "import", "security"
+    ]
+
+    for ri, sec in enumerate(sections, 3):
+        # Col A: file name
+        c = ws_sum.cell(ri, 1, Path(sec["file"]).name if sec["file"] else sec["file"])
+        c.font = body_font(bold=True)
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+        c.border = border
+        c.fill = fill(CLR_FILE_BG)
+
+        # Find the Review Checklist table (first table, 2-column)
+        checklist_dict = {}
+        for headers, rows in sec["tables"]:
+            if len(headers) == 2 and "aspect" in headers[0].lower():
+                for row in rows:
+                    checklist_dict[row[0].lower()] = row[1] if len(row) > 1 else ""
+                break
+
+        for ci, aspect in enumerate(CHECKLIST_ASPECTS, 2):
+            val = ""
+            for key, v in checklist_dict.items():
+                if aspect in key.lower():
+                    val = v
+                    break
+            c = ws_sum.cell(ri, ci, val)
+            c.font = body_font(size=11)
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            c.border = border
+            if val in ("✅", "✓"):
+                c.fill = fill("C8E6C9")
+            elif val in ("❌", "✗"):
+                c.fill = fill("FFCDD2")
+            else:
+                c.fill = fill("FFF9C4")
+
+    # ── Raw Review sheet ─────────────────────────────────────────────
+    ws_raw = wb.create_sheet(title="Raw Review")
+    ws_raw.cell(1, 1, "Gemini Review (Raw Markdown)").font = Font(name="Arial", bold=True, size=11)
+    ws_raw.column_dimensions["A"].width = 130
+    for ri, line in enumerate(review_output.splitlines(), 3):
+        ws_raw.cell(ri, 1, line).font = Font(name="Courier New", size=9)
 
     wb.save(filename)
-    console.print(f"[green]📊 Review saved to Excel file named {filename}[/green]")
+    console.print(f"[green]📊 Review saved to Excel: {filename}[/green]")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TKINTER MARKDOWN RENDERER  (rewritten)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def build_markdown_renderer(out_text_widget):
+    """
+    Returns a render_markdown(text) function bound to *out_text_widget*.
+    Handles: headers, fenced code blocks, markdown tables, inline code,
+    bold/italic text, horizontal rules, and plain paragraphs.
+    """
+    w = out_text_widget
+
+    # Tag configuration
+    try:
+        w.tag_configure("h1",      font=("Segoe UI", 13, "bold"), foreground="#1a237e", spacing1=6, spacing3=4)
+        w.tag_configure("h2",      font=("Segoe UI", 12, "bold"), foreground="#283593", spacing1=5, spacing3=3)
+        w.tag_configure("h3",      font=("Segoe UI", 11, "bold"), foreground="#1d4ed8", spacing1=4, spacing3=2)
+        w.tag_configure("code_block", font=("Consolas", 9),  background="#eef2f7", foreground="#1a1a1a", spacing1=2, spacing3=2)
+        w.tag_configure("inline_code", font=("Consolas", 9), background="#eef2f7")
+        w.tag_configure("bold",    font=("Segoe UI", 10, "bold"))
+        w.tag_configure("italic",  font=("Segoe UI", 10, "italic"))
+        w.tag_configure("table_hdr",  font=("Segoe UI", 9, "bold"), background="#4472C4", foreground="#ffffff")
+        w.tag_configure("table_odd",  font=("Segoe UI", 9),         background="#DCE6F1")
+        w.tag_configure("table_even", font=("Segoe UI", 9),         background="#ffffff")
+        w.tag_configure("table_sep",  font=("Consolas", 8),         foreground="#9e9e9e")
+        w.tag_configure("rule",    foreground="#9e9e9e")
+        w.tag_configure("info",    foreground="#2563eb")
+        w.tag_configure("success", foreground="#059669")
+        w.tag_configure("warning", foreground="#d97706")
+        w.tag_configure("error",   foreground="#dc2626")
+        w.tag_configure("section", font=("Segoe UI", 10, "bold"), foreground="#1d4ed8")
+        w.tag_configure("muted",   foreground="#475569")
+    except Exception:
+        pass
+
+    def _insert_inline(text_line, default_tag=None):
+        """Insert a line with inline bold/italic/code formatting."""
+        # Pattern: **bold**, *italic*, `code`
+        pattern = re.compile(r'(\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`)')
+        pos = 0
+        for m in pattern.finditer(text_line):
+            # insert plain text before this match
+            before = text_line[pos:m.start()]
+            if before:
+                w.insert("end", before, (default_tag,) if default_tag else ())
+            full = m.group(0)
+            if full.startswith("**"):
+                w.insert("end", m.group(2), ("bold",))
+            elif full.startswith("*"):
+                w.insert("end", m.group(3), ("italic",))
+            elif full.startswith("`"):
+                w.insert("end", m.group(4), ("inline_code",))
+            pos = m.end()
+        tail = text_line[pos:]
+        if tail:
+            w.insert("end", tail, (default_tag,) if default_tag else ())
+
+    def render_markdown(text: str):
+        lines = text.splitlines()
+        i = 0
+        in_code = False
+        code_lang = ""
+        code_lines = []
+
+        while i < len(lines):
+            line = lines[i]
+
+            # ── fenced code block ──────────────────────────────────────
+            if line.strip().startswith("```"):
+                if not in_code:
+                    in_code = True
+                    code_lang = line.strip()[3:].strip()
+                    code_lines = []
+                else:
+                    in_code = False
+                    block = "\n".join(code_lines)
+                    w.insert("end", f"[{code_lang or 'code'}]\n" if code_lang else "", ("muted",))
+                    w.insert("end", block + "\n", ("code_block",))
+                    w.insert("end", "\n")
+                i += 1
+                continue
+
+            if in_code:
+                code_lines.append(line)
+                i += 1
+                continue
+
+            # ── headers ───────────────────────────────────────────────
+            if line.startswith("### "):
+                w.insert("end", line[4:] + "\n", ("h3",))
+                i += 1
+                continue
+            if line.startswith("## "):
+                w.insert("end", line[3:] + "\n", ("h2",))
+                i += 1
+                continue
+            if line.startswith("# "):
+                w.insert("end", line[2:] + "\n", ("h1",))
+                i += 1
+                continue
+
+            # ── horizontal rule ───────────────────────────────────────
+            if re.match(r'^[-*_]{3,}\s*$', line):
+                w.insert("end", "─" * 70 + "\n", ("rule",))
+                i += 1
+                continue
+
+            # ── markdown table ────────────────────────────────────────
+            if line.count('|') >= 2 and i + 1 < len(lines) and re.match(r'^\s*\|?[\s\-:|]+\|', lines[i + 1]):
+                headers = [_strip_inline_md(c) for c in line.split('|') if c.strip()]
+                i += 2  # skip separator row
+
+                # Build a fixed-width column layout
+                col_width = max(16, min(30, (70 // max(len(headers), 1))))
+
+                # Header row
+                header_row = " | ".join(h[:col_width].ljust(col_width) for h in headers)
+                w.insert("end", header_row + "\n", ("table_hdr",))
+                sep_row = "-+-".join("-" * col_width for _ in headers)
+                w.insert("end", sep_row + "\n", ("table_sep",))
+
+                row_index = 0
+                while i < len(lines) and lines[i].count('|') >= 2:
+                    cells = [_strip_inline_md(c) for c in lines[i].split('|') if c.strip() != ""]
+                    while len(cells) < len(headers):
+                        cells.append("")
+                    cells = cells[:len(headers)]
+                    row_str = " | ".join(c[:col_width].ljust(col_width) for c in cells)
+                    tag = "table_odd" if row_index % 2 == 0 else "table_even"
+                    w.insert("end", row_str + "\n", (tag,))
+                    row_index += 1
+                    i += 1
+
+                w.insert("end", "\n")
+                continue
+
+            # ── numbered / bullet list items ──────────────────────────
+            if re.match(r'^\s*(\d+\.|[-*])\s+', line):
+                clean = re.sub(r'^\s*(\d+\.|[-*])\s+', '  • ', line)
+                _insert_inline(clean)
+                w.insert("end", "\n")
+                i += 1
+                continue
+
+            # ── plain text (with inline formatting) ───────────────────
+            if line.strip():
+                _insert_inline(line)
+                w.insert("end", "\n")
+            else:
+                w.insert("end", "\n")
+            i += 1
+
+    return render_markdown
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PIPELINE
+# ──────────────────────────────────────────────────────────────────────────────
 
 def run_pipeline(path: str, export_json: bool, autofix: bool, apply_all: bool, userprompt: Optional[str], max_chars: int, ui_logger=None, excel_filename: str = "project_review.xlsx", interactive: bool = False, prompt_func=None):
     if ui_logger:
@@ -331,6 +781,7 @@ def run_pipeline(path: str, export_json: bool, autofix: bool, apply_all: bool, u
         ui_logger(f"Analyzing {len(files)} files...\n")
     else:
         console.rule(f"[bold magenta]🔍 Analyzing {len(files)} files...[/bold magenta]")
+
     contents = {f: (read_file(f) or "") for f in files}
     batches, batch_files = chunk_files(files, contents, max_chars)
 
@@ -342,18 +793,15 @@ def run_pipeline(path: str, export_json: bool, autofix: bool, apply_all: bool, u
             console.print(f"[green]Processing batch {i}/{len(batches)} (Review)...[/green]")
         output = review_project(batch, userprompt)
         all_reviews.append(output)
-        
-        # Print review for this batch immediately
+
         if ui_logger:
             ui_logger(f"\n==== Review for batch {i}/{len(batches)} ====\n")
-            # Pass is_markdown=True to render markdown properly
             review_content = output[:20000] + ("\n...[truncated]\n" if len(output) > 20000 else "\n")
             ui_logger(review_content, is_markdown=True)
         else:
             console.rule(f"[bold blue]🧩 Review for batch {i}/{len(batches)}[/bold blue]")
             console.print(Markdown(output[:20000]))
-        
-        # Auto-fix immediately after reviewing this batch
+
         if autofix:
             if ui_logger:
                 ui_logger(f"Processing batch {i}/{len(batches)} (Auto-Fix)...\n")
@@ -378,6 +826,11 @@ def run_pipeline(path: str, export_json: bool, autofix: bool, apply_all: bool, u
         console.rule("[bold green]✅ Done[/bold green]")
     return review_output
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TKINTER UI
+# ──────────────────────────────────────────────────────────────────────────────
+
 def launch_ui():
     if tk is None:
         console.print("[red]Tkinter is not available in this environment. Please run via CLI.[/red]")
@@ -387,7 +840,7 @@ def launch_ui():
     app.title("AI Code Debugger + Auto Fixer (Gemini)")
     app.geometry("900x700")
     try:
-        app.iconbitmap(default="")  # ignore if not available
+        app.iconbitmap(default="")
     except Exception:
         pass
     app.configure(bg="#f5f7fb")
@@ -400,7 +853,6 @@ def launch_ui():
     maxchars_var = tk.IntVar(value=200_000)
     is_running = tk.BooleanVar(value=False)
 
-    # Header bar with subtle animation
     header = tk.Frame(app, bg="#2b2d42", height=52)
     header.pack(fill=tk.X, side=tk.TOP)
     title_lbl = tk.Label(header, text="AI Code Debugger + Auto Fixer (Gemini)", fg="white", bg="#2b2d42", font=("Segoe UI", 12, "bold"))
@@ -408,7 +860,6 @@ def launch_ui():
     status_lbl = tk.Label(header, text="Idle", fg="#a8dadc", bg="#2b2d42", font=("Segoe UI", 10))
     status_lbl.pack(side=tk.RIGHT, padx=12)
 
-    # Root content frame (ttk with padding looks cleaner)
     frm = ttk.Frame(app, padding=10)
     frm.pack(fill=tk.BOTH, expand=True)
 
@@ -447,7 +898,6 @@ def launch_ui():
 
     out_label = ttk.Label(frm, text="Output:")
     out_label.pack(anchor="w", pady=(10, 0))
-    # Footer button row anchored to bottom so it never gets pushed off-screen
     btn_row = ttk.Frame(frm)
     btn_row.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
 
@@ -457,9 +907,9 @@ def launch_ui():
         out_container,
         height=25,
         wrap=tk.WORD,
-        bg="#f8fafc",                # soft background
-        fg="#0f172a",               # near-black text
-        insertbackground="#0f172a", # cursor color
+        bg="#f8fafc",
+        fg="#0f172a",
+        insertbackground="#0f172a",
         borderwidth=1,
         relief="solid"
     )
@@ -467,115 +917,20 @@ def launch_ui():
         out_text.configure(font=("Consolas", 10), padx=14, pady=12, spacing1=4, spacing3=4)
     except Exception:
         pass
-    # Define color tags
-    try:
-        out_text.tag_configure("section", foreground="#1d4ed8", font=("Consolas", 10, "bold"))
-        out_text.tag_configure("info", foreground="#2563eb")
-        out_text.tag_configure("success", foreground="#059669")
-        out_text.tag_configure("warning", foreground="#d97706")
-        out_text.tag_configure("error", foreground="#dc2626")
-        out_text.tag_configure("muted", foreground="#475569")
-        out_text.tag_configure("code", background="#eef2f7")
-    except Exception:
-        pass
     out_text.pack(fill=tk.BOTH, expand=True)
 
-    # Create progress bar with fixed-width placeholder to prevent layout shift
-    progress_placeholder = ttk.Label(btn_row, width=28)  # Fixed width placeholder
+    # Build the markdown renderer bound to out_text
+    render_markdown = build_markdown_renderer(out_text)
+
+    progress_placeholder = ttk.Label(btn_row, width=28)
     progress_placeholder.pack(side=tk.LEFT, padx=10)
-    
     progress = ttk.Progressbar(btn_row, mode="indeterminate", length=220)
-    
+
     run_btn = ttk.Button(btn_row, text="Run")
     run_btn.pack(side=tk.LEFT)
     def clear_output():
         out_text.delete("1.0", tk.END)
     ttk.Button(btn_row, text="Clear Output", command=clear_output).pack(side=tk.LEFT, padx=5)
-
-    def render_markdown(text: str, start_pos: str = "1.0"):
-        """Render markdown text with appropriate formatting tags."""
-        lines = text.split('\n')
-        i = 0
-        in_code_block = False
-        code_block_lines = []
-
-        while i < len(lines):
-            line = lines[i]
-
-            # Toggle code block on triple backticks
-            if line.strip().startswith("```"):
-                if not in_code_block:
-                    in_code_block = True
-                    code_block_lines = []
-                else:
-                    # closing fence, flush code block
-                    code_text = '\n'.join(code_block_lines)
-                    out_text.insert(tk.END, code_text + '\n', ("code",))
-                    out_text.insert(tk.END, '\n')
-                    in_code_block = False
-                i += 1
-                continue
-
-            if in_code_block:
-                code_block_lines.append(line)
-                i += 1
-                continue
-
-            # Headers
-            if line.startswith('###'):
-                header_text = line.lstrip('#').strip()
-                out_text.insert(tk.END, header_text + '\n', ("section",))
-                i += 1
-                continue
-            elif line.startswith('##'):
-                header_text = line.lstrip('#').strip()
-                out_text.insert(tk.END, header_text + '\n', ("section",))
-                i += 1
-                continue
-            elif line.startswith('#'):
-                header_text = line.lstrip('#').strip()
-                out_text.insert(tk.END, header_text + '\n', ("section",))
-                i += 1
-                continue
-
-            # Tables - detect header line followed by separator line with dashes
-            if '|' in line and i + 1 < len(lines) and re.match(r'^\s*\|?\s*[-:\s|]+\s*\|?\s*$', lines[i + 1]):
-                # Table header
-                cols = [c.strip() for c in line.split('|')[1:-1]]
-                if cols:
-                    header_row = '| ' + ' | '.join(cols) + ' |\n'
-                    out_text.insert(tk.END, header_row, ("info",))
-                    separator = '|' + '|'.join([' --- '] * len(cols)) + '|\n'
-                    out_text.insert(tk.END, separator, ("muted",))
-                i += 2  # skip header and separator
-                # Table rows
-                while i < len(lines) and '|' in lines[i]:
-                    row_cols = [c.strip() for c in lines[i].split('|')[1:-1]]
-                    while len(row_cols) < len(cols):
-                        row_cols.append('')
-                    row_cols = row_cols[:len(cols)]
-                    row_text = '| ' + ' | '.join(row_cols) + ' |\n'
-                    out_text.insert(tk.END, row_text)
-                    i += 1
-                out_text.insert(tk.END, '\n')
-                continue
-
-            # Inline code using single backticks
-            if '`' in line:
-                parts = re.split(r'(`[^`]+`)', line)
-                for part in parts:
-                    if part.startswith('`') and part.endswith('`') and len(part) > 2:
-                        code_part = part.strip('`')
-                        out_text.insert(tk.END, code_part, ("code",))
-                    else:
-                        out_text.insert(tk.END, part)
-                out_text.insert(tk.END, '\n')
-                i += 1
-                continue
-
-            # Regular text
-            out_text.insert(tk.END, line + '\n')
-            i += 1
 
     def safe_log(msg: str, tag: str = None, is_markdown: bool = False):
         def append():
@@ -586,18 +941,16 @@ def launch_ui():
                     applied_tag = "error"
                 elif low.startswith("starting") or "processing batch" in low:
                     applied_tag = "info"
-                elif "suggested fix" in low or "gemini debugging output" in low or "starting auto fix" in low:
+                elif "suggested fix" in low or "gemini debugging output" in low:
                     applied_tag = "section"
                 elif "saved" in low or "✅" in msg or "done" in low:
                     applied_tag = "success"
 
             if is_markdown:
-                # Render markdown in a readable way using your renderer
                 try:
-                    render_markdown(msg, "1.0")
+                    render_markdown(msg)
                 except Exception:
-                    # fallback: insert raw if markdown rendering fails
-                    out_text.insert(tk.END, msg + ("\n" if not msg.endswith("\n") else ""), (applied_tag,))
+                    out_text.insert(tk.END, msg + ("\n" if not msg.endswith("\n") else ""), (applied_tag,) if applied_tag else ())
             else:
                 msg_to_insert = msg if msg.endswith("\n") else msg + "\n"
                 if applied_tag:
@@ -606,7 +959,7 @@ def launch_ui():
                     out_text.insert(tk.END, msg_to_insert)
 
             out_text.see(tk.END)
-            out_text.update_idletasks()  # Force refresh
+            out_text.update_idletasks()
         app.after(0, append)
 
     def ui_yes_no(question: str) -> bool:
@@ -623,14 +976,12 @@ def launch_ui():
         gate.wait()
         return result_holder["ans"]
 
-    # Simple header pulse animation while running
     def pulse_header(step: int = 0):
         if not is_running.get():
             header.configure(bg="#2b2d42")
             title_lbl.configure(bg="#2b2d42")
             status_lbl.configure(bg="#2b2d42")
             return
-        # Two-tone pulse
         colors = ["#2b2d42", "#31344f"]
         c = colors[step % len(colors)]
         header.configure(bg=c)
@@ -649,8 +1000,8 @@ def launch_ui():
         if running:
             status_lbl.configure(text="Running...", fg="#ffd166")
             run_btn.configure(text="Running...")
-            progress_placeholder.pack_forget()  # Hide placeholder
-            progress.pack(side=tk.LEFT, padx=10)  # Show progress bar
+            progress_placeholder.pack_forget()
+            progress.pack(side=tk.LEFT, padx=10)
             progress.start(12)
             pulse_header(0)
         else:
@@ -660,8 +1011,8 @@ def launch_ui():
                 progress.stop()
             except Exception:
                 pass
-            progress.pack_forget()  # Hide progress bar
-            progress_placeholder.pack(side=tk.LEFT, padx=10)  # Show placeholder to maintain layout
+            progress.pack_forget()
+            progress_placeholder.pack(side=tk.LEFT, padx=10)
 
     def on_run():
         folder = path_var.get().strip()
@@ -694,11 +1045,14 @@ def launch_ui():
         threading.Thread(target=worker, daemon=True).start()
 
     run_btn.configure(command=on_run)
-
     app.mainloop()
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ──────────────────────────────────────────────────────────────────────────────
+
 def main():
-    # Launch UI if no CLI arguments are provided
     if len(sys.argv) == 1:
         launch_ui()
         return
@@ -716,6 +1070,7 @@ def main():
     args = parser.parse_args()
 
     run_pipeline(args.path, args.json, args.autofix, args.apply_all, args.userprompt, args.max_chars, ui_logger=None)
+
 
 if __name__ == "__main__":
     main()
