@@ -248,10 +248,6 @@ Output the corrected code for this file only.
             console.print(f"[red]Error fixing {file_path}: {e}[/red]")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# EXCEL EXPORT  (fully rewritten)
-# ──────────────────────────────────────────────────────────────────────────────
-
 def _strip_inline_md(text: str) -> str:
     """Remove bold (**), italic (*), and backtick markers from a string."""
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
@@ -595,10 +591,6 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
     console.print(f"[green]📊 Review saved to Excel: {filename}[/green]")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TKINTER MARKDOWN RENDERER  (rewritten)
-# ──────────────────────────────────────────────────────────────────────────────
-
 def build_markdown_renderer(out_text_widget):
     """
     Returns a render_markdown(text) function bound to *out_text_widget*.
@@ -750,10 +742,6 @@ def build_markdown_renderer(out_text_widget):
     return render_markdown
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# PIPELINE
-# ──────────────────────────────────────────────────────────────────────────────
-
 def run_pipeline(path: str, export_json: bool, autofix: bool, apply_all: bool, userprompt: Optional[str], max_chars: int, ui_logger=None, excel_filename: str = "project_review.xlsx", interactive: bool = False, prompt_func=None):
     if ui_logger:
         ui_logger("Starting analysis...\n")
@@ -826,10 +814,6 @@ def run_pipeline(path: str, export_json: bool, autofix: bool, apply_all: bool, u
         console.rule("[bold green]✅ Done[/bold green]")
     return review_output
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# TKINTER UI
-# ──────────────────────────────────────────────────────────────────────────────
 
 def launch_ui():
     if tk is None:
@@ -1047,10 +1031,6 @@ def launch_ui():
     run_btn.configure(command=on_run)
     app.mainloop()
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# ENTRY POINT
-# ──────────────────────────────────────────────────────────────────────────────
 
 def main():
     if len(sys.argv) == 1:
