@@ -210,6 +210,11 @@ Current Code:
 ```
 
 Output the corrected code for this file only.
+Just give the corrected code in the output don't give any other text.
+Output format :
+```<language>
+<corrected file code>
+```
 """
         try:
             resp = model.generate_content(fix_prompt)
