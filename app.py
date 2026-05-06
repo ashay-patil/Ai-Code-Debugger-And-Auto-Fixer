@@ -19,7 +19,7 @@ except Exception:
 
 
 console = Console()
-MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "models/gemini-2.5-flash")
+MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "models/gemini-3-flash-preview")
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 try:
