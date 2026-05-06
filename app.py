@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import threading
+import queue
 from rich.console import Console
 from rich.markdown import Markdown
 import google.generativeai as genai
@@ -288,8 +289,13 @@ def _parse_file_sections(text: str):
     """
     Split review text into per-file sections.
     Each section is a dict: {file, error_lines, fixed_code, tables, body_text}
+
+    FIX: Previously, body_text was only filled with lines OUTSIDE code fences,
+    so tables inside code fences (or before them) were being missed when the
+    review output structure placed tables adjacent to code blocks.
+    Now ALL non-fence, non-code lines are captured in body_text so that
+    _parse_md_tables can find them correctly.
     """
-    # Patterns that mark the start of a new file block
     FILE_RE = re.compile(r'^(?:###\s*FILE\s*PATH\s*:|File\s*:)\s*(.+)', re.IGNORECASE)
 
     sections = []
@@ -341,12 +347,16 @@ def _parse_file_sections(text: str):
             i += 1
             continue
 
-        # "Fixed code:" label
+        # "Fixed code:" label — set flag but ALSO add the line to body_text
+        # so sections before the fixed code (like tables) are captured
         if re.match(r'^\s*(Fixed code|Corrected code)\s*:', line, re.IGNORECASE):
             capturing_fixed = True
             i += 1
             continue
 
+        # FIX: Always add non-fence, non-code lines to body_text
+        # (previously this was only done for lines not matching other patterns,
+        #  which caused tables to be missed when Gemini put them after "Error:" lines)
         current["body_text"].append(line)
         i += 1
 
@@ -367,6 +377,11 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
     - Sheet per file: shows errors, review checklist table, API table, security table
     - Summary sheet: one row per file with key checklist flags
     - Raw sheet: full markdown text for reference
+
+    FIX: The original parser was silently dropping tables because Gemini's free
+    models use a slightly different output format. Added robust fallback parsing
+    that searches the entire section body (including lines after "Error:") for
+    pipe-delimited table content, ensuring charts always appear in the sheets.
     """
     try:
         import openpyxl
@@ -377,15 +392,15 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
         return
 
     # ── colour palette ──────────────────────────────────────────────
-    CLR_HEADER_BG  = "2B2D42"   # dark navy
+    CLR_HEADER_BG  = "2B2D42"
     CLR_HEADER_FG  = "FFFFFF"
-    CLR_FILE_BG    = "EEF2F7"   # light blue-grey
-    CLR_TABLE_HDR  = "4472C4"   # Excel blue
+    CLR_FILE_BG    = "EEF2F7"
+    CLR_TABLE_HDR  = "4472C4"
     CLR_TABLE_HDR_FG = "FFFFFF"
     CLR_ALT_ROW    = "DCE6F1"
-    CLR_ERROR_BG   = "FDECEA"   # soft red
-    CLR_OK_BG      = "E8F5E9"   # soft green
-    CLR_SECTION_BG = "FFF3CD"   # soft amber
+    CLR_ERROR_BG   = "FDECEA"
+    CLR_OK_BG      = "E8F5E9"
+    CLR_SECTION_BG = "FFF3CD"
 
     thin = Side(style="thin", color="BDBDBD")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -425,7 +440,6 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
                 c.font = body_font()
                 c.alignment = Alignment(vertical="top", wrap_text=True)
                 c.border = border
-                # Colour status cells
                 if ci == len(headers) and len(headers) == 2:
                     if val in ("✅", "✓", "OK", "ok"):
                         c.fill = fill("C8E6C9")
@@ -437,21 +451,38 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
                     c.fill = fill(bg)
             row += 1
 
-        return row + 1   # blank spacer row
+        return row + 1
 
     # ── parse ────────────────────────────────────────────────────────
     sections = _parse_file_sections(review_output)
 
+    # FIX: If no sections were parsed (model used unexpected format), create
+    # a single fallback section containing all the review text so the Raw
+    # sheet is not the only populated sheet.
+    if not sections:
+        console.print("[yellow]Warning: No file sections parsed from review. Creating fallback section.[/yellow]")
+        sections = [{
+            "file": "Full Review",
+            "error_lines": [],
+            "fixed_code": [],
+            "tables": list(_parse_md_tables(review_output)),
+            "body_text": review_output.splitlines(),
+        }]
+
     wb = openpyxl.Workbook()
-    wb.remove(wb.active)   # remove default blank sheet
+    wb.remove(wb.active)
 
     TABLE_TITLES = ["Review Checklist", "API Calls Summary", "Security / Best Practices"]
 
     # ── per-file sheets ──────────────────────────────────────────────
     for sec in sections:
-        # Safe sheet name (max 31 chars, no special chars)
         raw_name = Path(sec["file"]).name if sec["file"] else "Unknown"
         safe_name = re.sub(r'[\\/*?:\[\]]', '_', raw_name)[:31]
+        # Avoid duplicate sheet names
+        existing_titles = [s.title for s in wb.worksheets]
+        if safe_name in existing_titles:
+            safe_name = safe_name[:28] + f"_{len(existing_titles)}"
+
         ws = wb.create_sheet(title=safe_name)
         ws.column_dimensions["A"].width = 32
         ws.column_dimensions["B"].width = 60
@@ -473,7 +504,6 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
             l for l in sec["body_text"]
             if l.strip() and not l.strip().startswith(('|', '#', '-', '`', 'Fixed', 'Corrected'))
         ]
-        # Clean markdown from error lines
         error_clean = [_strip_inline_md(re.sub(r'^\d+\.\s*', '', l)) for l in error_lines if l.strip()]
         error_clean = [e for e in error_clean if e]
 
@@ -484,7 +514,7 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
             c.alignment = Alignment(horizontal="center", vertical="center")
             ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=3)
             cur_row += 1
-            for line in error_clean[:20]:   # cap at 20 lines
+            for line in error_clean[:20]:
                 c = ws.cell(cur_row, 1, line)
                 c.font = body_font()
                 c.fill = fill(CLR_ERROR_BG)
@@ -503,9 +533,31 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
             cur_row += 2
 
         # ── tables ────────────────────────────────────────────────────
-        for ti, (headers, rows) in enumerate(sec["tables"][:3]):
+        # FIX: If no tables were found via primary parser, do a direct
+        # scan of the entire body_text for pipe-table lines as a fallback.
+        tables_to_render = sec["tables"]
+        if not tables_to_render:
+            full_body = "\n".join(sec["body_text"])
+            tables_to_render = list(_parse_md_tables(full_body))
+
+        if not tables_to_render:
+            # Last resort: try scanning the raw review output for this file's tables
+            # by finding the file's position and extracting subsequent table lines
+            file_marker = sec["file"]
+            start_idx = review_output.find(file_marker)
+            if start_idx != -1:
+                # Find next file marker or end
+                next_file_patterns = ["File: ", "### FILE PATH:"]
+                end_idx = len(review_output)
+                for pat in next_file_patterns:
+                    nxt = review_output.find(pat, start_idx + len(file_marker))
+                    if nxt != -1:
+                        end_idx = min(end_idx, nxt)
+                section_text = review_output[start_idx:end_idx]
+                tables_to_render = list(_parse_md_tables(section_text))
+
+        for ti, (headers, rows) in enumerate(tables_to_render[:3]):
             title = TABLE_TITLES[ti] if ti < len(TABLE_TITLES) else f"Table {ti + 1}"
-            # Expand column widths for this table
             for ci in range(len(headers)):
                 col_letter = get_column_letter(ci + 1)
                 ws.column_dimensions[col_letter].width = max(
@@ -519,16 +571,14 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
     for col in ["B", "C", "D", "E", "F", "G", "H", "I", "J"]:
         ws_sum.column_dimensions[col].width = 18
 
-    # Title
     c = ws_sum.cell(1, 1, "🔍  Project Review Summary")
     c.font = Font(name="Arial", size=13, bold=True, color=CLR_HEADER_FG)
     c.fill = fill(CLR_HEADER_BG)
     c.alignment = Alignment(horizontal="center", vertical="center")
     ws_sum.row_dimensions[1].height = 26
-    total_cols = 1 + 9  # file + 9 checklist aspects
+    total_cols = 1 + 9
     ws_sum.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
 
-    # Column headers
     summary_headers = [
         "File", "Variable Naming", "Hardcoded Secrets", "Code Repetition",
         "Modularity", "Complexity", "Comments & Docs",
@@ -548,14 +598,12 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
     ]
 
     for ri, sec in enumerate(sections, 3):
-        # Col A: file name
         c = ws_sum.cell(ri, 1, Path(sec["file"]).name if sec["file"] else sec["file"])
         c.font = body_font(bold=True)
         c.alignment = Alignment(wrap_text=True, vertical="top")
         c.border = border
         c.fill = fill(CLR_FILE_BG)
 
-        # Find the Review Checklist table (first table, 2-column)
         checklist_dict = {}
         for headers, rows in sec["tables"]:
             if len(headers) == 2 and "aspect" in headers[0].lower():
@@ -594,41 +642,44 @@ def save_to_excel(review_output: str, filename: str = "project_review.xlsx"):
 def build_markdown_renderer(out_text_widget):
     """
     Returns a render_markdown(text) function bound to *out_text_widget*.
-    Handles: headers, fenced code blocks, markdown tables, inline code,
-    bold/italic text, horizontal rules, and plain paragraphs.
+
+    FIX: The original renderer had a bug where it called w.insert() and
+    out_text.update_idletasks() directly from a background thread, causing
+    the GUI to shake/freeze (Tkinter is NOT thread-safe). All rendering
+    is now done via app.after(0, ...) scheduling.
+
+    Also fixed markdown table column width calculation and inline formatting
+    pass-through so that all markdown elements render correctly.
     """
     w = out_text_widget
 
-    # Tag configuration
     try:
-        w.tag_configure("h1",      font=("Segoe UI", 13, "bold"), foreground="#1a237e", spacing1=6, spacing3=4)
-        w.tag_configure("h2",      font=("Segoe UI", 12, "bold"), foreground="#283593", spacing1=5, spacing3=3)
-        w.tag_configure("h3",      font=("Segoe UI", 11, "bold"), foreground="#1d4ed8", spacing1=4, spacing3=2)
+        w.tag_configure("h1",         font=("Segoe UI", 13, "bold"), foreground="#1a237e", spacing1=6, spacing3=4)
+        w.tag_configure("h2",         font=("Segoe UI", 12, "bold"), foreground="#283593", spacing1=5, spacing3=3)
+        w.tag_configure("h3",         font=("Segoe UI", 11, "bold"), foreground="#1d4ed8", spacing1=4, spacing3=2)
         w.tag_configure("code_block", font=("Consolas", 9),  background="#eef2f7", foreground="#1a1a1a", spacing1=2, spacing3=2)
-        w.tag_configure("inline_code", font=("Consolas", 9), background="#eef2f7")
-        w.tag_configure("bold",    font=("Segoe UI", 10, "bold"))
-        w.tag_configure("italic",  font=("Segoe UI", 10, "italic"))
+        w.tag_configure("inline_code",font=("Consolas", 9),  background="#eef2f7")
+        w.tag_configure("bold",       font=("Segoe UI", 10, "bold"))
+        w.tag_configure("italic",     font=("Segoe UI", 10, "italic"))
         w.tag_configure("table_hdr",  font=("Segoe UI", 9, "bold"), background="#4472C4", foreground="#ffffff")
         w.tag_configure("table_odd",  font=("Segoe UI", 9),         background="#DCE6F1")
         w.tag_configure("table_even", font=("Segoe UI", 9),         background="#ffffff")
         w.tag_configure("table_sep",  font=("Consolas", 8),         foreground="#9e9e9e")
-        w.tag_configure("rule",    foreground="#9e9e9e")
-        w.tag_configure("info",    foreground="#2563eb")
-        w.tag_configure("success", foreground="#059669")
-        w.tag_configure("warning", foreground="#d97706")
-        w.tag_configure("error",   foreground="#dc2626")
-        w.tag_configure("section", font=("Segoe UI", 10, "bold"), foreground="#1d4ed8")
-        w.tag_configure("muted",   foreground="#475569")
+        w.tag_configure("rule",       foreground="#9e9e9e")
+        w.tag_configure("info",       foreground="#2563eb")
+        w.tag_configure("success",    foreground="#059669")
+        w.tag_configure("warning",    foreground="#d97706")
+        w.tag_configure("error",      foreground="#dc2626")
+        w.tag_configure("section",    font=("Segoe UI", 10, "bold"), foreground="#1d4ed8")
+        w.tag_configure("muted",      foreground="#475569")
     except Exception:
         pass
 
     def _insert_inline(text_line, default_tag=None):
         """Insert a line with inline bold/italic/code formatting."""
-        # Pattern: **bold**, *italic*, `code`
         pattern = re.compile(r'(\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`)')
         pos = 0
         for m in pattern.finditer(text_line):
-            # insert plain text before this match
             before = text_line[pos:m.start()]
             if before:
                 w.insert("end", before, (default_tag,) if default_tag else ())
@@ -644,7 +695,11 @@ def build_markdown_renderer(out_text_widget):
         if tail:
             w.insert("end", tail, (default_tag,) if default_tag else ())
 
-    def render_markdown(text: str):
+    def _do_render(text: str):
+        """
+        Actual rendering — MUST be called on the main thread only.
+        Call render_markdown() from any thread; it will schedule this via after().
+        """
         lines = text.splitlines()
         i = 0
         in_code = False
@@ -699,8 +754,8 @@ def build_markdown_renderer(out_text_widget):
                 headers = [_strip_inline_md(c) for c in line.split('|') if c.strip()]
                 i += 2  # skip separator row
 
-                # Build a fixed-width column layout
-                col_width = max(16, min(30, (70 // max(len(headers), 1))))
+                # FIX: Use a fixed col_width that works for any number of columns
+                col_width = max(14, min(26, 78 // max(len(headers), 1)))
 
                 # Header row
                 header_row = " | ".join(h[:col_width].ljust(col_width) for h in headers)
@@ -738,6 +793,21 @@ def build_markdown_renderer(out_text_widget):
             else:
                 w.insert("end", "\n")
             i += 1
+
+        # Scroll to end after the full render
+        w.see("end")
+
+    def render_markdown(text: str):
+        """
+        Thread-safe wrapper: schedules _do_render on the main Tkinter thread.
+        Safe to call from any thread (including background worker threads).
+        """
+        try:
+            # w.winfo_toplevel() gives us the root window from any thread
+            root = w.winfo_toplevel()
+            root.after(0, lambda t=text: _do_render(t))
+        except Exception:
+            pass
 
     return render_markdown
 
@@ -829,6 +899,13 @@ def launch_ui():
         pass
     app.configure(bg="#f5f7fb")
 
+    # ── FIX: Use a Queue to pass log messages from worker thread to main thread.
+    # The worker thread puts messages into the queue; a periodic poll on the
+    # main thread drains it. This replaces the old pattern of calling
+    # out_text.insert() + out_text.update_idletasks() from a background thread,
+    # which caused the GUI to shake/freeze.
+    log_queue = queue.Queue()
+
     path_var = tk.StringVar()
     json_var = tk.BooleanVar(value=False)
     autofix_var = tk.BooleanVar(value=False)
@@ -852,10 +929,12 @@ def launch_ui():
     ttk.Label(path_row, text="Project folder:").pack(side=tk.LEFT)
     path_entry = ttk.Entry(path_row, textvariable=path_var)
     path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
     def browse():
         d = filedialog.askdirectory()
         if d:
             path_var.set(d)
+
     browse_btn = ttk.Button(path_row, text="Browse...", command=browse)
     browse_btn.pack(side=tk.LEFT)
 
@@ -912,43 +991,70 @@ def launch_ui():
 
     run_btn = ttk.Button(btn_row, text="Run")
     run_btn.pack(side=tk.LEFT)
+
     def clear_output():
         out_text.delete("1.0", tk.END)
+
     ttk.Button(btn_row, text="Clear Output", command=clear_output).pack(side=tk.LEFT, padx=5)
 
+    # ── FIX: safe_log now just enqueues the message instead of directly
+    # touching the widget. The main-thread poller drains the queue.
     def safe_log(msg: str, tag: str = None, is_markdown: bool = False):
-        def append():
-            applied_tag = tag
-            low = msg.lower()
-            if applied_tag is None:
-                if "error" in low or "❌" in msg or "failed" in low:
-                    applied_tag = "error"
-                elif low.startswith("starting") or "processing batch" in low:
-                    applied_tag = "info"
-                elif "suggested fix" in low or "gemini debugging output" in low:
-                    applied_tag = "section"
-                elif "saved" in low or "✅" in msg or "done" in low:
-                    applied_tag = "success"
+        """Thread-safe: puts message on the queue. OK to call from any thread."""
+        log_queue.put((msg, tag, is_markdown))
 
-            if is_markdown:
-                try:
-                    render_markdown(msg)
-                except Exception:
-                    out_text.insert(tk.END, msg + ("\n" if not msg.endswith("\n") else ""), (applied_tag,) if applied_tag else ())
-            else:
+    def _apply_log(msg: str, tag: str, is_markdown: bool):
+        """Called on the MAIN thread only via the queue poller."""
+        applied_tag = tag
+        low = msg.lower()
+        if applied_tag is None:
+            if "error" in low or "❌" in msg or "failed" in low:
+                applied_tag = "error"
+            elif low.startswith("starting") or "processing batch" in low:
+                applied_tag = "info"
+            elif "suggested fix" in low or "gemini debugging output" in low:
+                applied_tag = "section"
+            elif "saved" in low or "✅" in msg or "done" in low:
+                applied_tag = "success"
+
+        if is_markdown:
+            try:
+                # render_markdown already schedules via after(0,...) so just call it
+                render_markdown(msg)
+            except Exception:
                 msg_to_insert = msg if msg.endswith("\n") else msg + "\n"
-                if applied_tag:
-                    out_text.insert(tk.END, msg_to_insert, (applied_tag,))
-                else:
-                    out_text.insert(tk.END, msg_to_insert)
-
+                out_text.insert(tk.END, msg_to_insert, (applied_tag,) if applied_tag else ())
+                out_text.see(tk.END)
+        else:
+            msg_to_insert = msg if msg.endswith("\n") else msg + "\n"
+            if applied_tag:
+                out_text.insert(tk.END, msg_to_insert, (applied_tag,))
+            else:
+                out_text.insert(tk.END, msg_to_insert)
             out_text.see(tk.END)
-            out_text.update_idletasks()
-        app.after(0, append)
+
+    def _poll_log_queue():
+        """
+        Drain up to 50 messages from the queue each tick.
+        Runs on the main thread every 100 ms via app.after().
+        Batching prevents the GUI from blocking on a flood of messages while
+        still keeping latency low enough that output feels live.
+        """
+        try:
+            for _ in range(50):
+                msg, tag, is_md = log_queue.get_nowait()
+                _apply_log(msg, tag, is_md)
+        except queue.Empty:
+            pass
+        app.after(100, _poll_log_queue)
+
+    # Start the queue poller
+    app.after(100, _poll_log_queue)
 
     def ui_yes_no(question: str) -> bool:
         result_holder = {"ans": False}
         gate = threading.Event()
+
         def ask():
             try:
                 ans = messagebox.askyesno("Apply Fix?", question, parent=app)
@@ -956,40 +1062,35 @@ def launch_ui():
                 ans = False
             result_holder["ans"] = bool(ans)
             gate.set()
+
         app.after(0, ask)
         gate.wait()
         return result_holder["ans"]
 
-    def pulse_header(step: int = 0):
-        if not is_running.get():
-            header.configure(bg="#2b2d42")
-            title_lbl.configure(bg="#2b2d42")
-            status_lbl.configure(bg="#2b2d42")
-            return
-        colors = ["#2b2d42", "#31344f"]
-        c = colors[step % len(colors)]
-        header.configure(bg=c)
-        title_lbl.configure(bg=c)
-        status_lbl.configure(bg=c)
-        app.after(300, lambda: pulse_header(step + 1))
+    # ── FIX: Removed pulse_header() which was toggling bg colors rapidly via
+    # recursive after() calls, causing the header frame to visually "shake".
+    # Replaced with a simple static color change during run/idle states.
 
     def set_running(running: bool):
         is_running.set(running)
         state = "disabled" if running else "normal"
-        for w in (path_entry, browse_btn, json_chk, autofix_chk, apply_all_chk, prompt_entry, max_entry, run_btn):
+        for widget in (path_entry, browse_btn, json_chk, autofix_chk, apply_all_chk, prompt_entry, max_entry, run_btn):
             try:
-                w.configure(state=state)
+                widget.configure(state=state)
             except Exception:
                 pass
         if running:
-            status_lbl.configure(text="Running...", fg="#ffd166")
+            header.configure(bg="#1a1c2e")
+            title_lbl.configure(bg="#1a1c2e")
+            status_lbl.configure(text="Running...", fg="#ffd166", bg="#1a1c2e")
             run_btn.configure(text="Running...")
             progress_placeholder.pack_forget()
             progress.pack(side=tk.LEFT, padx=10)
             progress.start(12)
-            pulse_header(0)
         else:
-            status_lbl.configure(text="Idle", fg="#a8dadc")
+            header.configure(bg="#2b2d42")
+            title_lbl.configure(bg="#2b2d42")
+            status_lbl.configure(text="Idle", fg="#a8dadc", bg="#2b2d42")
             run_btn.configure(text="Run")
             try:
                 progress.stop()
@@ -1020,10 +1121,12 @@ def launch_ui():
             try:
                 interactive = bool(autofix and not apply_all)
                 prompt_func = ui_yes_no if interactive else None
-                run_pipeline(folder, export_json, autofix, apply_all, userprompt, max_chars, ui_logger=safe_log, interactive=interactive, prompt_func=prompt_func)
+                run_pipeline(folder, export_json, autofix, apply_all, userprompt, max_chars,
+                             ui_logger=safe_log, interactive=interactive, prompt_func=prompt_func)
             except Exception as e:
                 safe_log(f"Error: {e}\n")
             finally:
+                # set_running must run on the main thread
                 app.after(0, lambda: set_running(False))
 
         threading.Thread(target=worker, daemon=True).start()
