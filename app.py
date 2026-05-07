@@ -178,12 +178,44 @@ that do not exist—choose the most plausible correct existing path/filename.
 Here is the project:
 {all_code}
 
-Output format (repeat for all files whether there exists error or not. If no error is present then say that no error and in fixed code place the original code as it is, and if there is error then tell the error and give the corrected code in fixed code):
-File: <path>
-Error: <short description>
+
+CRITICAL OUTPUT FORMAT — FOLLOW THIS EXACTLY FOR EVERY FILE, NO EXCEPTIONS:
+
+- Line 1 of each section: exactly "File: " then the file path. NO bold, NO ###, NO asterisks.
+- Line 2: exactly "Error: " then a short description, or "Error: No errors found" if clean.
+- Lines 3+: the three markdown tables below (always include all three, even if empty).
+- After tables: exactly "Fixed code:" on its own line, then the fenced code block.
+- Separate each file section with exactly one blank line.
+- Do NOT skip any file. Do NOT merge files. Do NOT add any preamble or summary text.
+
+Each section must look EXACTLY like this template:
+
+File: path/to/file.ext
+Error: <short description or "No errors found">
+
+| Review Aspect | Status |
+|---|---|
+| Variable naming | ✅ |
+| Hardcoded values/secrets | ✅ |
+| Code repetition | ✅ |
+| Modularity | ✅ |
+| Complexity (high/med/low) | low |
+| Comments & docs | ✅ |
+| Exception handling present | ✅ |
+| Dependency/import correctness | ✅ |
+| Security concerns | ✅ |
+
+| API Endpoint | Request (sample) | Response (sample) |
+|---|---|---|
+| None | | |
+
+| Category | Recommendation |
+|---|---|
+| None | No issues found |
+
 Fixed code:
 ```<language>
-<corrected file code>
+<full corrected file code>
 ```
 
 """
