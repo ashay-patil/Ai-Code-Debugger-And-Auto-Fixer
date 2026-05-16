@@ -181,8 +181,8 @@ Here is the project:
 
 CRITICAL OUTPUT FORMAT — FOLLOW THIS EXACTLY FOR EVERY FILE, NO EXCEPTIONS:
 
-- Line 1 of each section: exactly "File: " then the file path. NO bold, NO ###, NO asterisks.
-- Line 2: exactly "Error: " then a short description, or "Error: No errors found" if clean.
+- Line 1 of each section: exactly "### FILE: " then the file path.
+- Line 2: exactly "### Error: " then a short description, or "### Error: No errors found" if clean.
 - Lines 3+: the three markdown tables below (always include all three, even if empty).
 - After tables: exactly "Fixed code:" on its own line, then the fenced code block.
 - Separate each file section with exactly one blank line.
@@ -190,8 +190,8 @@ CRITICAL OUTPUT FORMAT — FOLLOW THIS EXACTLY FOR EVERY FILE, NO EXCEPTIONS:
 
 Each section must look EXACTLY like this template:
 
-File: path/to/file.ext
-Error: <short description or "No errors found">
+### FILE: path/to/file.ext
+### Error: <short description or "No errors found">
 
 | Review Aspect | Status |
 |---|---|
@@ -333,7 +333,10 @@ def _parse_file_sections(text: str):
     Now ALL non-fence, non-code lines are captured in body_text so that
     _parse_md_tables can find them correctly.
     """
-    FILE_RE = re.compile(r'^(?:###\s*FILE\s*PATH\s*:|File\s*:)\s*(.+)', re.IGNORECASE)
+    FILE_RE = re.compile(
+        r'^(?:###\s*FILE(?:\s*PATH)?\s*:|File\s*:)\s*(.+)',
+        re.IGNORECASE
+    )
 
     sections = []
     current = None

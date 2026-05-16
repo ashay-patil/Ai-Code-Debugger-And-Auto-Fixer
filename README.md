@@ -117,7 +117,7 @@ SUPPORTED_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".java", ".cpp", ".html", ".c
 
 #### 3.3.1 Advanced AI Features
 - **Context Persistence**: No memory of previous analysis sessions
-- **Multi-model Support**: Fixed to Gemini 2.0 Flash only
+- **Multi-model Support**: Fixed to models/gemini-3-flash-preview only
 - **Confidence Scoring**: No probability estimates for suggested fixes
 
 #### 3.3.2 Enterprise Features
@@ -162,41 +162,33 @@ SUPPORTED_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".java", ".cpp", ".html", ".c
 ### 4.3 Detailed Algorithm Explanation
 
 #### 4.3.1 File Discovery & Chunking Phase
+
 ```python
-def chunk_files(files, file_contents, max_chars):
-    """
-    Algorithm: Greedy batching with size constraints
-    Time Complexity: O(n)
-    Space Complexity: O(n)
-    """
-    batches, batch_files = [], []
-    current_batch, current_files, current_length = [], [], 0
-    
-    for file in files:
-        section = build_file_section(file, file_contents[file])
-        if current_batch and (current_length + len(section) > max_chars):
-            # Commit current batch and start new one
-            batches.append("\n".join(current_batch))
+def chunk_files(files: List[str], file_contents: Dict[str, str], max_chars: int) -> Tuple[List[str], List[List[str]]]:
+    batches = []
+    batch_files = []
+    current, current_files, length = [], [], 0
+    for f in files:
+        section = build_file_section(f, file_contents[f])
+        if current and (length + len(section) > max_chars):
+            batches.append("\n".join(current))
             batch_files.append(current_files)
-            current_batch, current_files, current_length = [section], [file], len(section)
+            current, current_files, length = [section], [f], len(section)
         else:
-            # Add to current batch
-            current_batch.append(section)
-            current_files.append(file)
-            current_length += len(section)
-    
-    # Handle final batch
-    if current_batch:
-        batches.append("\n".join(current_batch))
+            current.append(section)
+            current_files.append(f)
+            length += len(section)
+    if current:
+        batches.append("\n".join(current))
         batch_files.append(current_files)
-    
     return batches, batch_files
+
 ```
 
 #### 4.3.2 AI Analysis Phase
 The system uses a sophisticated prompt engineering approach:
 
-```python
+``````python
 def review_project(all_code: str, user_prompt: Optional[str]) -> str:
     prompt = f"""
 You are an expert software debugger and code reviewer.
@@ -251,31 +243,54 @@ that do not exist—choose the most plausible correct existing path/filename.
 Here is the project:
 {all_code}
 
-Output format (repeat for all files whether there exists error or not. If no error is present then say that no error and in fixed code place the original code as it is, and if there is error then tell the error and give the corrected code in fixed code):
-File: <path>
-Error: <short description>
+
+CRITICAL OUTPUT FORMAT — FOLLOW THIS EXACTLY FOR EVERY FILE, NO EXCEPTIONS:
+
+- Line 1 of each section: exactly "### File: " then the file path.
+- Line 2: exactly "### Error: " then a short description, or "### Error: No errors found" if clean.
+- Lines 3+: the three markdown tables below (always include all three, even if empty).
+- After tables: exactly "Fixed code:" on its own line, then the fenced code block.
+- Separate each file section with exactly one blank line.
+- Do NOT skip any file. Do NOT merge files. Do NOT add any preamble or summary text.
+
+Each section must look EXACTLY like this template:
+
+### FILE: path/to/file.ext
+### Error: <short description or "No errors found">
+
+| Review Aspect | Status |
+|---|---|
+| Variable naming | ✅ |
+| Hardcoded values/secrets | ✅ |
+| Code repetition | ✅ |
+| Modularity | ✅ |
+| Complexity (high/med/low) | low |
+| Comments & docs | ✅ |
+| Exception handling present | ✅ |
+| Dependency/import correctness | ✅ |
+| Security concerns | ✅ |
+
+| API Endpoint | Request (sample) | Response (sample) |
+|---|---|---|
+| None | | |
+
+| Category | Recommendation |
+|---|---|
+| None | No issues found |
+
 Fixed code:
-\`\`\`<language>
-<corrected file code>
-\`\`\`
-"""
+```<language>
+<full corrected file code>
 ```
 
+"""
+    return generate_content(prompt)
+``````
+
 #### 4.3.3 Fix Application Phase
-```python
+
+``````python
 def auto_fix_project(path: str, review_output: str, files_to_process: List[str], apply_all=False, interactive: bool = True, prompt_func=None, ui_logger=None):
-    """
-    Auto-fix files based on review output.
-    
-    Args:
-        path: Project directory path
-        review_output: Review output for the files being processed
-        files_to_process: List of file paths to process (only these files will be fixed)
-        apply_all: Whether to apply all fixes automatically
-        interactive: Whether to prompt for each fix
-        prompt_func: Function to call for user prompts
-        ui_logger: Optional UI logger function
-    """
     model = genai.GenerativeModel(MODEL_NAME)
 
     for file_path in files_to_process:
@@ -291,11 +306,16 @@ Review:
 
 File: {file_path}
 Current Code:
-\`\`\`{Path(file_path).suffix[1:]}
+```{Path(file_path).suffix[1:]}
 {code}
-\`\`\`
+```
 
 Output the corrected code for this file only.
+Just give the corrected code in the output don't give any other text.
+Output format :
+```<language>
+<corrected file code>
+```
 """
         try:
             resp = model.generate_content(fix_prompt)
@@ -311,7 +331,7 @@ Output the corrected code for this file only.
                 write_file(file_path, new_code)
             else:
                 if interactive:
-                    if ui_logger : 
+                    if ui_logger:
                         apply_change = bool(prompt_func(f"Apply suggested changes to {file_path}?"))
                         if apply_change:
                             write_file(file_path, new_code)
@@ -320,30 +340,28 @@ Output the corrected code for this file only.
                                 ui_logger(f"Skipped: {file_path}\n")
                             else:
                                 console.print(f"[yellow]⏩ Skipped: {file_path}[/yellow]")
-                    else :
-                            choice = input(f"Apply suggested changes to {file_path}? (y/n): ").strip().lower()
-                            if choice == 'y':
-                                write_file(file_path, new_code)
-                            else:
-                                console.print(f"[yellow]⏩ Skipped: {file_path}[/yellow]")
-                
+                    else:
+                        choice = input(f"Apply suggested changes to {file_path}? (y/n): ").strip().lower()
+                        if choice == 'y':
+                            write_file(file_path, new_code)
+                        else:
+                            console.print(f"[yellow]⏩ Skipped: {file_path}[/yellow]")
                 else:
                     if ui_logger:
                         ui_logger(f"Skipped (non-interactive): {file_path}\n")
-                    
                     else:
                         console.print(f"[yellow]⏩ Skipped (non-interactive): {file_path}[/yellow]")
         except Exception as e:
             console.print(f"[red]Error fixing {file_path}: {e}[/red]")
 
-```
+``````
 
 ### 4.4 Data Flow Diagram
 
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   Source    │    │  Batch      │    │   Gemini    │    │  Processed  │
-│   Code      │───▶│  Processor  │───▶│    AI       │───▶│   Output    │
+│   Code      │──▶│  Processor  │───▶│    AI       │──▶│   Output    │
 │   Files     │    │             │    │             │    │             │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
                          │                                      │
@@ -459,7 +477,7 @@ python app.py ./project-path --json --autofix --userprompt "Make the body color 
 | Environment Variable | Purpose | Default |
 |---------------------|---------|---------|
 | `GEMINI_API_KEY` | Google AI API authentication | Required |
-| `GEMINI_MODEL_NAME` | AI model selection | `models/gemini-2.5-flash` |
+| `GEMINI_MODEL_NAME` | AI model selection | `models/gemini-3-flash-preview` |
 
 ---
 
